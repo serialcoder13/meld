@@ -1,0 +1,57 @@
+module inventory "Inventory" {
+
+  step reserve "Reserve the items" (items: list<Item>)
+    -> reserved(total: money)
+     | out_of_stock(missing: list<text>)
+    uses store
+  {
+    let missing = []
+    let total = 0
+    for (let item of items) {
+      let stock = store.get("stock." + item.sku, { qty: 0, price: 0 })
+      if (stock.qty < item.qty) {
+        missing.push(item.sku)
+      } else {
+        total += stock.price * item.qty
+      }
+    }
+    if (missing.length > 0) {
+      return out_of_stock(missing: missing)
+    }
+    for (let item of items) {
+      let stock = store.get("stock." + item.sku)
+      store.set("stock." + item.sku, { qty: stock.qty - item.qty, price: stock.price })
+    }
+    return reserved(total: total)
+  }
+
+  step release "Put reserved items back" (items: list<Item>)
+    -> released
+    uses store
+  {
+    for (let item of items) {
+      let stock = store.get("stock." + item.sku)
+      store.set("stock." + item.sku, { qty: stock.qty + item.qty, price: stock.price })
+    }
+    return released()
+  }
+
+  step add_stock "Add stock" (sku: text, qty: number, price: money)
+    -> added(in_stock: number)
+     | rejected(reason: text)
+    uses store
+  {
+    if (qty <= 0) {
+      return rejected(reason: "Quantity must be more than 0")
+    }
+    let stock = store.get("stock." + sku, { qty: 0, price: price })
+    store.set("stock." + sku, { qty: stock.qty + qty, price: price })
+    return added(in_stock: stock.qty + qty)
+  }
+
+  flow restock "Add stock" on POST "/inventory/restock" (sku: text, qty: number, price: money) {
+    add = add_stock(sku: sku, qty: qty, price: price)
+    respond 200 { sku: sku, in_stock: add.added.in_stock }
+    respond 400 { error: "rejected", reason: add.rejected.reason }
+  }
+}

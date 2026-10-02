@@ -1,0 +1,336 @@
+module articles "Articles, favorites and tags" {
+  uses users.authenticate, users.require_user, users.profiles, users.resolve_names, users.followed_ids
+
+  table article {
+    slug: text unique
+    title: text
+    description: text
+    body: text
+    tagList: list<text>
+    authorId: number
+    createdAt: text
+    updatedAt: text
+  }
+
+  table favorite {
+    articleId: number
+    userId: number
+  }
+
+  // ---- helpers ----
+
+  // "Hello, World!" -> "hello-world"
+  fn slugify (title: text) -> text {
+    let out = ""
+    let gap = false
+    for (let c of title.toLowerCase().split("")) {
+      if ((c >= "a" && c <= "z") || (c >= "0" && c <= "9")) {
+        if (gap && out.length > 0) {
+          out += "-"
+        }
+        out += c
+        gap = false
+      } else {
+        gap = true
+      }
+    }
+    return out == "" ? "article" : out
+  }
+
+  fn page_size (limit: number | null) -> number {
+    return limit == null ? 20 : limit
+  }
+
+  fn blank_errors (article: ArticleChanges) -> map<list<text>> {
+    let errors = {}
+    for (let field of ["title", "description", "body"]) {
+      if (has(article, field) && article[field].trim() == "") {
+        errors[field] = ["can't be blank"]
+      }
+    }
+    return errors
+  }
+
+  fn article_view (row: row<article>, author: Profile, favorited: bool, favoritesCount: number, withBody: bool) -> Article {
+    let view = {
+      slug: row.slug,
+      title: row.title,
+      description: row.description,
+      tagList: row.tagList,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      favorited: favorited,
+      favoritesCount: favoritesCount,
+      author: author,
+    }
+    if (withBody) {
+      view.body = row.body
+    }
+    return view
+  }
+
+  // ---- finding articles ----
+
+  step find "Find an article" (slug: text)
+    -> found(row: row<article>)
+     | missing(errors: map<list<text>>)
+    uses db
+  {
+    let row = db.article.find({ slug: slug })
+    if (row == null) {
+      return missing(errors: { article: ["not found"] })
+    }
+    return found(row: row)
+  }
+
+  step list "List articles" (tag?: text, authorId: number | null, favoriterId: number | null, noMatch: bool, limit?: number, offset?: number)
+    -> page(rows: list<row<article>>, count: number)
+    uses db
+  {
+    if (noMatch) {
+      return page(rows: [], count: 0)
+    }
+    let where = {}
+    if (tag != null) {
+      where.tagList = { has: tag }
+    }
+    if (authorId != null) {
+      where.authorId = authorId
+    }
+    if (favoriterId != null) {
+      where.id = { in: db.favorite.list({ userId: favoriterId }).map(f => f.articleId) }
+    }
+    let rows = db.article.list(where, { order: "createdAt desc, id desc", limit: page_size(limit), offset: offset == null ? 0 : offset })
+    return page(rows: rows, count: db.article.count(where))
+  }
+
+  step feed "List articles by people you follow" (authorIds: list<number>, limit?: number, offset?: number)
+    -> page(rows: list<row<article>>, count: number)
+    uses db
+  {
+    let where = { authorId: { in: authorIds } }
+    let rows = db.article.list(where, { order: "createdAt desc, id desc", limit: page_size(limit), offset: offset == null ? 0 : offset })
+    return page(rows: rows, count: db.article.count(where))
+  }
+
+  step tags "List all tags" ()
+    -> found(tags: list<text>)
+    uses db
+  {
+    let all = []
+    for (let row of db.article.list({})) {
+      all = all.concat(row.tagList)
+    }
+    return found(tags: unique(all))
+  }
+
+  // Adds favorites and the author to articles, as seen by the viewer.
+  step present "Prepare articles for the response" (rows: list<row<article>>, viewer: number | null, profiles: map<Profile>, withBody: bool)
+    -> ready(articles: list<Article>)
+    uses db
+  {
+    let out = []
+    for (let row of rows) {
+      let favorited = viewer != null && db.favorite.exists({ articleId: row.id, userId: viewer })
+      out.push(article_view(row, profiles[text(row.authorId)], favorited, db.favorite.count({ articleId: row.id }), withBody))
+    }
+    return ready(articles: out)
+  }
+
+  // ---- changing articles ----
+
+  step create "Write an article" (article: NewArticle, authorId: number)
+    -> created(row: row<article>)
+     | invalid(errors: map<list<text>>)
+    uses db, clock, ids
+  {
+    let errors = blank_errors({ title: article.title, description: article.description, body: article.body })
+    if (keys(errors).length > 0) {
+      return invalid(errors: errors)
+    }
+    let now = clock.now()
+    let row = db.article.insert({
+      slug: slugify(article.title) + "-" + text(ids.number("article")),
+      title: article.title,
+      description: article.description,
+      body: article.body,
+      tagList: has(article, "tagList") ? article.tagList : [],
+      authorId: authorId,
+      createdAt: now,
+      updatedAt: now,
+    })
+    return created(row: row)
+  }
+
+  step edit "Change an article" (slug: text, userId: number, changes: ArticleChanges)
+    -> edited(row: row<article>)
+     | missing(errors: map<list<text>>)
+     | forbidden(errors: map<list<text>>)
+     | invalid(errors: map<list<text>>)
+    uses db, clock
+  {
+    let row = db.article.find({ slug: slug })
+    if (row == null) {
+      return missing(errors: { article: ["not found"] })
+    }
+    if (row.authorId != userId) {
+      return forbidden(errors: { article: ["forbidden"] })
+    }
+    let errors = blank_errors(changes)
+    if (keys(errors).length > 0) {
+      return invalid(errors: errors)
+    }
+    let set = { updatedAt: clock.now() }
+    for (let field of ["title", "description", "body", "tagList"]) {
+      if (has(changes, field)) {
+        set[field] = changes[field]
+      }
+    }
+    db.article.update({ id: row.id }, set)
+    return edited(row: db.article.get(row.id))
+  }
+
+  step remove "Delete an article" (slug: text, userId: number)
+    -> removed
+     | missing(errors: map<list<text>>)
+     | forbidden(errors: map<list<text>>)
+    uses db
+  {
+    let row = db.article.find({ slug: slug })
+    if (row == null) {
+      return missing(errors: { article: ["not found"] })
+    }
+    if (row.authorId != userId) {
+      return forbidden(errors: { article: ["forbidden"] })
+    }
+    db.favorite.delete({ articleId: row.id })
+    db.article.delete({ id: row.id })
+    return removed()
+  }
+
+  step favorite "Favorite an article" (slug: text, userId: number)
+    -> done(row: row<article>)
+     | missing(errors: map<list<text>>)
+    uses db
+  {
+    let row = db.article.find({ slug: slug })
+    if (row == null) {
+      return missing(errors: { article: ["not found"] })
+    }
+    if (!db.favorite.exists({ articleId: row.id, userId: userId })) {
+      db.favorite.insert({ articleId: row.id, userId: userId })
+    }
+    return done(row: row)
+  }
+
+  step unfavorite "Unfavorite an article" (slug: text, userId: number)
+    -> done(row: row<article>)
+     | missing(errors: map<list<text>>)
+    uses db
+  {
+    let row = db.article.find({ slug: slug })
+    if (row == null) {
+      return missing(errors: { article: ["not found"] })
+    }
+    db.favorite.delete({ articleId: row.id, userId: userId })
+    return done(row: row)
+  }
+
+  // ---- endpoints ----
+
+  flow list_articles "List articles" on GET "/api/articles"
+    (tag?: text, author?: text, favorited?: text, limit?: number, offset?: number, auth?: text from header "Authorization")
+  {
+    me = users.authenticate(header: auth)
+    names = users.resolve_names(author: author, favorited: favorited)
+    page = list(tag: tag, authorId: names.resolved.authorId, favoriterId: names.resolved.favoriterId, noMatch: names.resolved.noMatch, limit: limit, offset: offset)
+    people = users.profiles(ids: page.page.rows.map(r => r.authorId), viewer: me.viewer.id)
+    out = present(rows: page.page.rows, viewer: me.viewer.id, profiles: people.found.profiles, withBody: false)
+    respond 200 { articles: out.ready.articles, articlesCount: page.page.count }
+    respond 401 { errors: me.invalid.errors }
+  }
+
+  flow get_feed "Articles by people you follow" on GET "/api/articles/feed"
+    (limit?: number, offset?: number, auth?: text from header "Authorization")
+  {
+    me = users.require_user(header: auth)
+    follows = users.followed_ids(viewer: me.user.id)
+    page = feed(authorIds: follows.found.ids, limit: limit, offset: offset)
+    people = users.profiles(ids: page.page.rows.map(r => r.authorId), viewer: me.user.id)
+    out = present(rows: page.page.rows, viewer: me.user.id, profiles: people.found.profiles, withBody: false)
+    respond 200 { articles: out.ready.articles, articlesCount: page.page.count }
+    respond 401 { errors: me.missing.errors }
+    respond 401 { errors: me.invalid.errors }
+  }
+
+  flow get_article "Get an article" on GET "/api/articles/:slug" (slug: text, auth?: text from header "Authorization") {
+    me = users.authenticate(header: auth)
+    when me.viewer a = find(slug: slug)
+    people = users.profiles(ids: [a.found.row.authorId], viewer: me.viewer.id)
+    out = present(rows: [a.found.row], viewer: me.viewer.id, profiles: people.found.profiles, withBody: true)
+    respond 200 { article: out.ready.articles[0] }
+    respond 404 { errors: a.missing.errors }
+    respond 401 { errors: me.invalid.errors }
+  }
+
+  flow create_article "Write an article" on POST "/api/articles" (article: NewArticle, auth?: text from header "Authorization") {
+    me = users.require_user(header: auth)
+    c = create(article: article, authorId: me.user.id)
+    people = users.profiles(ids: [me.user.id], viewer: me.user.id)
+    out = present(rows: [c.created.row], viewer: me.user.id, profiles: people.found.profiles, withBody: true)
+    respond 201 { article: out.ready.articles[0] }
+    respond 422 { errors: c.invalid.errors }
+    respond 401 { errors: me.missing.errors }
+    respond 401 { errors: me.invalid.errors }
+  }
+
+  flow update_article "Change an article" on PUT "/api/articles/:slug" (slug: text, article: ArticleChanges, auth?: text from header "Authorization") {
+    me = users.require_user(header: auth)
+    e = edit(slug: slug, userId: me.user.id, changes: article)
+    people = users.profiles(ids: [e.edited.row.authorId], viewer: me.user.id)
+    out = present(rows: [e.edited.row], viewer: me.user.id, profiles: people.found.profiles, withBody: true)
+    respond 200 { article: out.ready.articles[0] }
+    respond 404 { errors: e.missing.errors }
+    respond 403 { errors: e.forbidden.errors }
+    respond 422 { errors: e.invalid.errors }
+    respond 401 { errors: me.missing.errors }
+    respond 401 { errors: me.invalid.errors }
+  }
+
+  flow delete_article "Delete an article" on DELETE "/api/articles/:slug" (slug: text, auth?: text from header "Authorization") {
+    me = users.require_user(header: auth)
+    d = remove(slug: slug, userId: me.user.id)
+    when d.removed respond 204
+    respond 404 { errors: d.missing.errors }
+    respond 403 { errors: d.forbidden.errors }
+    respond 401 { errors: me.missing.errors }
+    respond 401 { errors: me.invalid.errors }
+  }
+
+  flow favorite_article "Favorite an article" on POST "/api/articles/:slug/favorite" (slug: text, auth?: text from header "Authorization") {
+    me = users.require_user(header: auth)
+    f = favorite(slug: slug, userId: me.user.id)
+    people = users.profiles(ids: [f.done.row.authorId], viewer: me.user.id)
+    out = present(rows: [f.done.row], viewer: me.user.id, profiles: people.found.profiles, withBody: true)
+    respond 200 { article: out.ready.articles[0] }
+    respond 404 { errors: f.missing.errors }
+    respond 401 { errors: me.missing.errors }
+    respond 401 { errors: me.invalid.errors }
+  }
+
+  flow unfavorite_article "Unfavorite an article" on DELETE "/api/articles/:slug/favorite" (slug: text, auth?: text from header "Authorization") {
+    me = users.require_user(header: auth)
+    f = unfavorite(slug: slug, userId: me.user.id)
+    people = users.profiles(ids: [f.done.row.authorId], viewer: me.user.id)
+    out = present(rows: [f.done.row], viewer: me.user.id, profiles: people.found.profiles, withBody: true)
+    respond 200 { article: out.ready.articles[0] }
+    respond 404 { errors: f.missing.errors }
+    respond 401 { errors: me.missing.errors }
+    respond 401 { errors: me.invalid.errors }
+  }
+
+  flow get_tags "List tags" on GET "/api/tags" () {
+    t = tags()
+    respond 200 { tags: t.found.tags }
+  }
+}

@@ -1,0 +1,5 @@
+node_modules/
+.meld/
+*.sqlite
+*.sqlite-*
+.server.log

@@ -1,0 +1,344 @@
+module users "Users and profiles" {
+
+  table account {
+    username: text unique
+    email: text unique
+    passwordHash: text
+    bio: text | null
+    image: text | null
+  }
+
+  table follow {
+    followerId: number
+    followedId: number
+  }
+
+  // ---- helpers ----
+
+  fn user_view (row: row<account>, token: text) -> User {
+    return { email: row.email, token: token, username: row.username, bio: row.bio, image: row.image }
+  }
+
+  fn profile_view (row: row<account>, following: bool) -> Profile {
+    return { username: row.username, bio: row.bio, image: row.image, following: following }
+  }
+
+  // An empty bio or image means "none".
+  fn blank_to_null (value: text | null) -> text | null {
+    if (value == null || value.trim() == "") {
+      return null
+    }
+    return value
+  }
+
+  // "Token abc" -> "abc"
+  fn token_in (header: text) -> text | null {
+    for (let prefix of ["Token ", "Bearer "]) {
+      if (header.startsWith(prefix)) {
+        return header.slice(prefix.length).trim()
+      }
+    }
+    return null
+  }
+
+  // ---- signing up and in ----
+
+  step register "Sign up" (user: NewUser)
+    -> registered(user: User)
+     | invalid(errors: map<list<text>>)
+     | taken(errors: map<list<text>>)
+    uses db, crypto
+  {
+    let errors = {}
+    if (user.username.trim() == "") {
+      errors.username = ["can't be blank"]
+    }
+    if (user.email.trim() == "") {
+      errors.email = ["can't be blank"]
+    }
+    if (user.password == "") {
+      errors.password = ["can't be blank"]
+    } else if (user.password.length < 8) {
+      errors.password = ["is too short (minimum is 8 characters)"]
+    }
+    if (keys(errors).length > 0) {
+      return invalid(errors: errors)
+    }
+    if (db.account.exists({ username: user.username })) {
+      return taken(errors: { username: ["has already been taken"] })
+    }
+    if (db.account.exists({ email: user.email })) {
+      return taken(errors: { email: ["has already been taken"] })
+    }
+    let row = db.account.insert({
+      username: user.username,
+      email: user.email,
+      passwordHash: crypto.hashPassword(user.password),
+      bio: null,
+      image: null,
+    })
+    return registered(user: user_view(row, crypto.sign({ uid: row.id })))
+  }
+
+  step login "Sign in" (user: Login)
+    -> signed_in(user: User)
+     | invalid(errors: map<list<text>>)
+     | wrong(errors: map<list<text>>)
+    uses db, crypto
+  {
+    let errors = {}
+    if (user.email.trim() == "") {
+      errors.email = ["can't be blank"]
+    }
+    if (user.password == "") {
+      errors.password = ["can't be blank"]
+    }
+    if (keys(errors).length > 0) {
+      return invalid(errors: errors)
+    }
+    let row = db.account.find({ email: user.email })
+    if (row == null || !crypto.checkPassword(user.password, row.passwordHash)) {
+      return wrong(errors: { credentials: ["invalid"] })
+    }
+    return signed_in(user: user_view(row, crypto.sign({ uid: row.id })))
+  }
+
+  // ---- who is calling ----
+
+  // For endpoints that work with or without a signed-in user.
+  step authenticate "Find out who is calling" (header: text | null)
+    -> viewer(id: number | null)
+     | invalid(errors: map<list<text>>)
+    uses db, crypto
+  {
+    if (header == null) {
+      return viewer(id: null)
+    }
+    let token = token_in(header)
+    let claims = token == null ? null : crypto.verify(token)
+    if (claims == null || !has(claims, "uid") || db.account.get(claims.uid) == null) {
+      return invalid(errors: { token: ["is invalid"] })
+    }
+    return viewer(id: claims.uid)
+  }
+
+  // For endpoints that need a signed-in user.
+  step require_user "Check the caller is signed in" (header: text | null)
+    -> user(id: number)
+     | missing(errors: map<list<text>>)
+     | invalid(errors: map<list<text>>)
+    uses db, crypto
+  {
+    if (header == null) {
+      return missing(errors: { token: ["is missing"] })
+    }
+    let token = token_in(header)
+    let claims = token == null ? null : crypto.verify(token)
+    if (claims == null || !has(claims, "uid") || db.account.get(claims.uid) == null) {
+      return invalid(errors: { token: ["is invalid"] })
+    }
+    return user(id: claims.uid)
+  }
+
+  // ---- the signed-in user ----
+
+  step current "Load the signed-in user" (id: number)
+    -> found(user: User)
+    uses db, crypto
+  {
+    return found(user: user_view(db.account.get(id), crypto.sign({ uid: id })))
+  }
+
+  step update "Change the signed-in user" (id: number, changes: UserChanges)
+    -> updated(user: User)
+     | invalid(errors: map<list<text>>)
+     | taken(errors: map<list<text>>)
+    uses db, crypto
+  {
+    let errors = {}
+    let set = {}
+    for (let field of ["username", "email"]) {
+      if (has(changes, field)) {
+        if (changes[field].trim() == "") {
+          errors[field] = ["can't be blank"]
+        } else {
+          set[field] = changes[field]
+        }
+      }
+    }
+    if (has(changes, "password")) {
+      if (changes.password.length < 8) {
+        errors.password = ["is too short (minimum is 8 characters)"]
+      } else {
+        set.passwordHash = crypto.hashPassword(changes.password)
+      }
+    }
+    if (has(changes, "bio")) {
+      set.bio = blank_to_null(changes.bio)
+    }
+    if (has(changes, "image")) {
+      set.image = blank_to_null(changes.image)
+    }
+    if (keys(errors).length > 0) {
+      return invalid(errors: errors)
+    }
+    for (let field of ["username", "email"]) {
+      if (has(set, field)) {
+        let others = { id: { not: id } }
+        others[field] = set[field]
+        if (db.account.exists(others)) {
+          let taken_errors = {}
+          taken_errors[field] = ["has already been taken"]
+          return taken(errors: taken_errors)
+        }
+      }
+    }
+    if (keys(set).length > 0) {
+      db.account.update({ id: id }, set)
+    }
+    return updated(user: user_view(db.account.get(id), crypto.sign({ uid: id })))
+  }
+
+  // ---- profiles ----
+
+  step profile "Look up a profile" (username: text, viewer: number | null)
+    -> found(profile: Profile)
+     | missing(errors: map<list<text>>)
+    uses db
+  {
+    let row = db.account.find({ username: username })
+    if (row == null) {
+      return missing(errors: { profile: ["not found"] })
+    }
+    let following = viewer != null && db.follow.exists({ followerId: viewer, followedId: row.id })
+    return found(profile: profile_view(row, following))
+  }
+
+  step follow_user "Follow someone" (username: text, viewer: number)
+    -> followed(profile: Profile)
+     | missing(errors: map<list<text>>)
+    uses db
+  {
+    let row = db.account.find({ username: username })
+    if (row == null) {
+      return missing(errors: { profile: ["not found"] })
+    }
+    if (!db.follow.exists({ followerId: viewer, followedId: row.id })) {
+      db.follow.insert({ followerId: viewer, followedId: row.id })
+    }
+    return followed(profile: profile_view(row, true))
+  }
+
+  step unfollow_user "Stop following someone" (username: text, viewer: number)
+    -> unfollowed(profile: Profile)
+     | missing(errors: map<list<text>>)
+    uses db
+  {
+    let row = db.account.find({ username: username })
+    if (row == null) {
+      return missing(errors: { profile: ["not found"] })
+    }
+    db.follow.delete({ followerId: viewer, followedId: row.id })
+    return unfollowed(profile: profile_view(row, false))
+  }
+
+  // ---- used by other modules ----
+
+  // Profiles keyed by user id (as text), as seen by the viewer.
+  step profiles "Look up several profiles" (ids: list<number>, viewer: number | null)
+    -> found(profiles: map<Profile>)
+    uses db
+  {
+    let out = {}
+    for (let id of unique(ids)) {
+      let row = db.account.get(id)
+      if (row != null) {
+        let following = viewer != null && db.follow.exists({ followerId: viewer, followedId: id })
+        out[text(id)] = profile_view(row, following)
+      }
+    }
+    return found(profiles: out)
+  }
+
+  // Turns usernames from a query into ids. noMatch: a name was given but no such user exists.
+  step resolve_names "Turn usernames into ids" (author?: text, favorited?: text)
+    -> resolved(authorId: number | null, favoriterId: number | null, noMatch: bool)
+    uses db
+  {
+    let authorRow = author == null ? null : db.account.find({ username: author })
+    let favoriterRow = favorited == null ? null : db.account.find({ username: favorited })
+    let noMatch = (author != null && authorRow == null) || (favorited != null && favoriterRow == null)
+    return resolved(
+      authorId: authorRow == null ? null : authorRow.id,
+      favoriterId: favoriterRow == null ? null : favoriterRow.id,
+      noMatch: noMatch,
+    )
+  }
+
+  step followed_ids "List who someone follows" (viewer: number)
+    -> found(ids: list<number>)
+    uses db
+  {
+    return found(ids: db.follow.list({ followerId: viewer }).map(f => f.followedId))
+  }
+
+  // ---- endpoints ----
+
+  flow sign_up "Sign up" on POST "/api/users" (user: NewUser) {
+    r = register(user: user)
+    respond 201 { user: r.registered.user }
+    respond 422 { errors: r.invalid.errors }
+    respond 409 { errors: r.taken.errors }
+  }
+
+  flow sign_in "Sign in" on POST "/api/users/login" (user: Login) {
+    r = login(user: user)
+    respond 200 { user: r.signed_in.user }
+    respond 422 { errors: r.invalid.errors }
+    respond 401 { errors: r.wrong.errors }
+  }
+
+  flow get_current_user "Get the signed-in user" on GET "/api/user" (auth?: text from header "Authorization") {
+    me = require_user(header: auth)
+    u = current(id: me.user.id)
+    respond 200 { user: u.found.user }
+    respond 401 { errors: me.missing.errors }
+    respond 401 { errors: me.invalid.errors }
+  }
+
+  flow update_current_user "Update the signed-in user" on PUT "/api/user" (user: UserChanges, auth?: text from header "Authorization") {
+    me = require_user(header: auth)
+    u = update(id: me.user.id, changes: user)
+    respond 200 { user: u.updated.user }
+    respond 422 { errors: u.invalid.errors }
+    respond 409 { errors: u.taken.errors }
+    respond 401 { errors: me.missing.errors }
+    respond 401 { errors: me.invalid.errors }
+  }
+
+  flow get_profile "Get a profile" on GET "/api/profiles/:username" (username: text, auth?: text from header "Authorization") {
+    me = authenticate(header: auth)
+    p = profile(username: username, viewer: me.viewer.id)
+    respond 200 { profile: p.found.profile }
+    respond 404 { errors: p.missing.errors }
+    respond 401 { errors: me.invalid.errors }
+  }
+
+  flow follow "Follow a user" on POST "/api/profiles/:username/follow" (username: text, auth?: text from header "Authorization") {
+    me = require_user(header: auth)
+    f = follow_user(username: username, viewer: me.user.id)
+    respond 200 { profile: f.followed.profile }
+    respond 404 { errors: f.missing.errors }
+    respond 401 { errors: me.missing.errors }
+    respond 401 { errors: me.invalid.errors }
+  }
+
+  flow unfollow "Unfollow a user" on DELETE "/api/profiles/:username/follow" (username: text, auth?: text from header "Authorization") {
+    me = require_user(header: auth)
+    f = unfollow_user(username: username, viewer: me.user.id)
+    respond 200 { profile: f.unfollowed.profile }
+    respond 404 { errors: f.missing.errors }
+    respond 401 { errors: me.missing.errors }
+    respond 401 { errors: me.invalid.errors }
+  }
+}

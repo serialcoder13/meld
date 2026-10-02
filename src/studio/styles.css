@@ -1,0 +1,102 @@
+@import "tailwindcss";
+@import "@xyflow/react/dist/style.css";
+
+/* Design language borrowed from kirun-ui: dotted canvas, soft layered cards,
+   blue inputs, green outcomes, blue curved connectors. */
+
+:root {
+  --meld-canvas: #f5f7fa;
+  --meld-card-shadow: 0 0 0 1px rgba(0, 0, 0, 0.03), 0 4px 12px rgba(0, 0, 0, 0.08), 0 8px 24px rgba(0, 0, 0, 0.06);
+  --meld-card-shadow-hover: 0 0 0 1px rgba(0, 0, 0, 0.04), 0 8px 20px rgba(0, 0, 0, 0.1), 0 12px 32px rgba(0, 0, 0, 0.08);
+  --meld-card-shadow-selected: 0 0 0 3px rgba(59, 130, 246, 0.4), 0 0 0 6px rgba(59, 130, 246, 0.15), 0 8px 20px rgba(0, 0, 0, 0.12);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: #1f2937;
+  background: var(--meld-canvas);
+}
+
+.meld-card {
+  background: #fff;
+  border-radius: 6px;
+  box-shadow: var(--meld-card-shadow);
+  transition: box-shadow 0.2s ease, transform 0.2s ease, opacity 0.2s ease;
+}
+.meld-card:hover {
+  box-shadow: var(--meld-card-shadow-hover);
+}
+.meld-card.is-selected {
+  box-shadow: var(--meld-card-shadow-selected);
+  transform: translateY(-2px);
+}
+.meld-card.run-done {
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.45), var(--meld-card-shadow);
+}
+.meld-card.run-failed {
+  box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.5), var(--meld-card-shadow);
+}
+.meld-card.run-skipped {
+  opacity: 0.35;
+}
+
+.meld-card-head {
+  border-radius: 6px 6px 0 0;
+  border-bottom: 1px solid #f3f4f6;
+  background: linear-gradient(180deg, #fafafa 0%, #fff 100%);
+}
+
+/* connectors, as in kirun-ui: hollow circles, blue in, green out */
+.react-flow__handle.meld-in,
+.react-flow__handle.meld-out {
+  width: 10px;
+  height: 10px;
+  background: #fff;
+  border-width: 2px;
+  border-radius: 9999px;
+}
+.react-flow__handle.meld-in {
+  border-color: #3b82f6;
+}
+.react-flow__handle.meld-out {
+  border-color: #10b981;
+}
+.react-flow__handle.meld-out.is-taken {
+  background: #10b981;
+}
+
+.react-flow__edge-path {
+  stroke: #60a5fa;
+  stroke-width: 2px;
+  opacity: 0.55;
+}
+.react-flow__edge:hover .react-flow__edge-path,
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke: #3b82f6;
+  stroke-width: 3.5px;
+  opacity: 0.9;
+}
+.react-flow__edge.meld-input .react-flow__edge-path {
+  stroke: #cbd5e1;
+  stroke-dasharray: 5 5;
+  opacity: 0.9;
+}
+.react-flow__edge.run-taken .react-flow__edge-path {
+  stroke: #10b981;
+  stroke-width: 3px;
+  opacity: 0.95;
+}
+.react-flow__edge.run-not-taken .react-flow__edge-path {
+  opacity: 0.12;
+}
+
+.meld-code {
+  font-family: "SF Mono", Monaco, "Cascadia Code", ui-monospace, monospace;
+}

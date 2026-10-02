@@ -1,0 +1,56 @@
+record Order {
+  order_id: text
+  customer: text
+  items: list<Item>
+  total: money
+  payment_id: text
+  placed_at: text
+}
+
+module orders "Orders" {
+  uses inventory.reserve, inventory.release, billing.charge
+
+  step save_order "Save the order" (customer: text, items: list<Item>, total: money, payment_id: text)
+    -> saved(order_id: text)
+    uses store, ids, clock
+  {
+    let order_id = ids.next("ord")
+    store.set("order." + order_id, {
+      order_id: order_id,
+      customer: customer,
+      items: items,
+      total: total,
+      payment_id: payment_id,
+      placed_at: clock.now(),
+    })
+    return saved(order_id: order_id)
+  }
+
+  step find_order "Find an order" (order_id: text)
+    -> found(order: Order)
+     | missing
+    uses store
+  {
+    if (!store.has("order." + order_id)) {
+      return missing()
+    }
+    return found(order: store.get("order." + order_id))
+  }
+
+  flow place_order "Place an order" on POST "/orders" (customer: text, items: list<Item>) {
+    reserve = inventory.reserve(items: items)
+    charge = billing.charge(customer: customer, amount: reserve.reserved.total)
+    save = save_order(customer: customer, items: items, total: reserve.reserved.total, payment_id: charge.paid.payment_id)
+    when charge.declined release = inventory.release(items: items)
+
+    respond 201 { order_id: save.saved.order_id, total: reserve.reserved.total }
+    respond 409 { error: "out_of_stock", missing: reserve.out_of_stock.missing }
+    when release.released respond 402 { error: "payment_declined", reason: charge.declined.reason }
+  }
+
+  flow get_order "Look up an order" on GET "/orders/:order_id" (order_id: text) {
+    find = find_order(order_id: order_id)
+    respond 200 find.found.order
+    when find.missing respond 404 { error: "not_found" }
+  }
+}

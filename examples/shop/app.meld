@@ -1,0 +1,6 @@
+app shop "Tiny shop"
+
+record Item {
+  sku: text
+  qty: number
+}

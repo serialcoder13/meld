@@ -1,0 +1,93 @@
+module comments "Comments on articles" {
+  uses users.authenticate, users.require_user, users.profiles, articles.find
+
+  table comment {
+    articleId: number
+    authorId: number
+    body: text
+    createdAt: text
+    updatedAt: text
+  }
+
+  fn comment_views (rows: list<row<comment>>, profiles: map<Profile>) -> list<Comment> {
+    return rows.map(row => ({
+      id: row.id,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      body: row.body,
+      author: profiles[text(row.authorId)],
+    }))
+  }
+
+  step add "Write a comment" (articleId: number, authorId: number, comment: NewComment)
+    -> added(row: row<comment>)
+     | invalid(errors: map<list<text>>)
+    uses db, clock
+  {
+    if (comment.body.trim() == "") {
+      return invalid(errors: { body: ["can't be blank"] })
+    }
+    let now = clock.now()
+    return added(row: db.comment.insert({ articleId: articleId, authorId: authorId, body: comment.body, createdAt: now, updatedAt: now }))
+  }
+
+  step list_for "List an article's comments" (articleId: number)
+    -> found(rows: list<row<comment>>)
+    uses db
+  {
+    return found(rows: db.comment.list({ articleId: articleId }))
+  }
+
+  step remove "Delete a comment" (articleId: number, id: number, userId: number)
+    -> removed
+     | missing(errors: map<list<text>>)
+     | forbidden(errors: map<list<text>>)
+    uses db
+  {
+    let row = db.comment.find({ id: id, articleId: articleId })
+    if (row == null) {
+      return missing(errors: { comment: ["not found"] })
+    }
+    if (row.authorId != userId) {
+      return forbidden(errors: { comment: ["forbidden"] })
+    }
+    db.comment.delete({ id: id })
+    return removed()
+  }
+
+  // ---- endpoints ----
+
+  flow list_comments "List comments" on GET "/api/articles/:slug/comments" (slug: text, auth?: text from header "Authorization") {
+    me = users.authenticate(header: auth)
+    when me.viewer a = articles.find(slug: slug)
+    c = list_for(articleId: a.found.row.id)
+    people = users.profiles(ids: c.found.rows.map(r => r.authorId), viewer: me.viewer.id)
+    respond 200 { comments: comment_views(c.found.rows, people.found.profiles) }
+    respond 404 { errors: a.missing.errors }
+    respond 401 { errors: me.invalid.errors }
+  }
+
+  flow add_comment "Write a comment" on POST "/api/articles/:slug/comments" (slug: text, comment: NewComment, auth?: text from header "Authorization") {
+    me = users.require_user(header: auth)
+    when me.user a = articles.find(slug: slug)
+    c = add(articleId: a.found.row.id, authorId: me.user.id, comment: comment)
+    people = users.profiles(ids: [me.user.id], viewer: me.user.id)
+    respond 201 { comment: comment_views([c.added.row], people.found.profiles)[0] }
+    respond 404 { errors: a.missing.errors }
+    respond 422 { errors: c.invalid.errors }
+    respond 401 { errors: me.missing.errors }
+    respond 401 { errors: me.invalid.errors }
+  }
+
+  flow delete_comment "Delete a comment" on DELETE "/api/articles/:slug/comments/:id" (slug: text, id: number, auth?: text from header "Authorization") {
+    me = users.require_user(header: auth)
+    when me.user a = articles.find(slug: slug)
+    d = remove(articleId: a.found.row.id, id: id, userId: me.user.id)
+    when d.removed respond 204
+    respond 404 { errors: a.missing.errors }
+    respond 404 { errors: d.missing.errors }
+    respond 403 { errors: d.forbidden.errors }
+    respond 401 { errors: me.missing.errors }
+    respond 401 { errors: me.invalid.errors }
+  }
+}

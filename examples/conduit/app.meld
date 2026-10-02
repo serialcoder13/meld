@@ -1,0 +1,79 @@
+// Conduit: the RealWorld "Medium clone" backend, written in Meld.
+// Spec and tests: ./spec (from github.com/realworld-apps/realworld, MIT).
+
+app conduit "Conduit"
+
+// ---- what goes over the wire ----
+
+record NewUser {
+  username: text
+  email: text
+  password: text
+}
+
+record Login {
+  email: text
+  password: text
+}
+
+record UserChanges {
+  username?: text
+  email?: text
+  password?: text
+  bio?: text | null
+  image?: text | null
+}
+
+record User {
+  email: text
+  token: text
+  username: text
+  bio: text | null
+  image: text | null
+}
+
+record Profile {
+  username: text
+  bio: text | null
+  image: text | null
+  following: bool
+}
+
+record NewArticle {
+  title: text
+  description: text
+  body: text
+  tagList?: list<text>
+}
+
+record ArticleChanges {
+  title?: text
+  description?: text
+  body?: text
+  tagList?: list<text>
+}
+
+record Article {
+  slug: text
+  title: text
+  description: text
+  body?: text
+  tagList: list<text>
+  createdAt: text
+  updatedAt: text
+  favorited: bool
+  favoritesCount: number
+  author: Profile
+}
+
+record NewComment {
+  body: text
+}
+
+record Comment {
+  id: number
+  createdAt: text
+  updatedAt: text
+  body: text
+  author: Profile
+}

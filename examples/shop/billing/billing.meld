@@ -1,0 +1,11 @@
+module billing "Billing" {
+
+  // This step's body is JavaScript and runs on Bun's engine, next to the Meld
+  // interpreter. It still gets only what the model grants: its inputs and the
+  // ids and log ports.
+  step charge "Charge the card" (customer: text, amount: money)
+    -> paid(payment_id: text)
+     | declined(reason: text)
+    uses ids, log
+    js "./charge.ts"
+}
