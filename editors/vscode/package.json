@@ -1,0 +1,95 @@
+{
+  "name": "meld-vscode",
+  "displayName": "Meld",
+  "description": "Work on Meld apps in VS Code: highlighting, live checks, who-uses, and Meld Studio in an editor tab.",
+  "version": "0.0.1",
+  "publisher": "meld",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/serialcoder13/meld"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters"
+  ],
+  "main": "./src/extension.js",
+  "activationEvents": [
+    "workspaceContains:**/*.meld"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "meld",
+        "aliases": [
+          "Meld"
+        ],
+        "extensions": [
+          ".meld"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "meld",
+        "scopeName": "source.meld",
+        "path": "./syntaxes/meld.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "meld.openStudio",
+        "title": "Meld: Open Studio"
+      },
+      {
+        "command": "meld.check",
+        "title": "Meld: Check the App"
+      },
+      {
+        "command": "meld.whoUses",
+        "title": "Meld: Who Uses This Step"
+      },
+      {
+        "command": "meld.explain",
+        "title": "Meld: Explain the App"
+      },
+      {
+        "command": "meld.installSkill",
+        "title": "Meld: Add the Claude Code Skill to This Project"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "meld.whoUses",
+          "when": "editorLangId == meld",
+          "group": "navigation@1"
+        },
+        {
+          "command": "meld.openStudio",
+          "when": "editorLangId == meld",
+          "group": "navigation@2"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Meld",
+      "properties": {
+        "meld.command": {
+          "type": "string",
+          "default": "meld",
+          "description": "How to run the Meld command line, e.g. \"meld\" or \"bun /path/to/meld/src/cli.ts\"."
+        },
+        "meld.studioPort": {
+          "type": "number",
+          "default": 4310,
+          "description": "Port for Meld Studio when opened from VS Code."
+        }
+      }
+    }
+  }
+}

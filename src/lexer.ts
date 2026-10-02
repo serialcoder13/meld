@@ -6,6 +6,7 @@ export interface Token {
   kind: TokenKind;
   value: string;
   loc: Loc;
+  doc?: string; // the /// lines right above this token, if any
 }
 
 const PUNCT = [
@@ -16,6 +17,14 @@ const PUNCT = [
 
 export function lex(source: string, file: string): Token[] {
   const tokens: Token[] = [];
+  let doc: string[] = [];
+  const push = (t: Token) => {
+    if (doc.length) {
+      t.doc = doc.join("\n");
+      doc = [];
+    }
+    tokens.push(t);
+  };
   let i = 0;
   let line = 1;
   let lineStart = 0;
@@ -34,7 +43,11 @@ export function lex(source: string, file: string): Token[] {
       continue;
     }
     if (c === "/" && source[i + 1] === "/") {
+      const start = i;
       while (i < source.length && source[i] !== "\n") i++;
+      // "/// text" is documentation: the plain-language explanation of what follows
+      const text = source.slice(start, i);
+      if (text.startsWith("///") && !text.startsWith("////")) doc.push(text.slice(3).replace(/^ /, "").trimEnd());
       continue;
     }
     if (c === "/" && source[i + 1] === "*") {
@@ -54,7 +67,7 @@ export function lex(source: string, file: string): Token[] {
     if (/[A-Za-z_]/.test(c)) {
       const start = i;
       while (i < source.length && /[A-Za-z0-9_]/.test(source[i]!)) i++;
-      tokens.push({ kind: "ident", value: source.slice(start, i), loc: loc(start) });
+      push({ kind: "ident", value: source.slice(start, i), loc: loc(start) });
       continue;
     }
     if (/[0-9]/.test(c)) {
@@ -64,7 +77,7 @@ export function lex(source: string, file: string): Token[] {
         i++;
         while (i < source.length && /[0-9_]/.test(source[i]!)) i++;
       }
-      tokens.push({ kind: "num", value: source.slice(start, i).replaceAll("_", ""), loc: loc(start) });
+      push({ kind: "num", value: source.slice(start, i).replaceAll("_", ""), loc: loc(start) });
       continue;
     }
     if (c === '"' || c === "'") {
@@ -88,7 +101,7 @@ export function lex(source: string, file: string): Token[] {
         i++;
       }
       i++;
-      tokens.push({ kind: "str", value, loc: loc(start) });
+      push({ kind: "str", value, loc: loc(start) });
       continue;
     }
     if (c === "`") throw new MeldSyntaxError(loc(i), 'Backtick templates are not supported. Use "text" + text(value) instead.');
@@ -97,7 +110,7 @@ export function lex(source: string, file: string): Token[] {
     if (source.startsWith("??", i)) throw new MeldSyntaxError(loc(i), 'Meld has no ??. Use has(value, "field") or store.get(key, default).');
     const p = PUNCT.find((p) => source.startsWith(p, i));
     if (!p) throw new MeldSyntaxError(loc(i), `Unexpected character '${c}'.`);
-    tokens.push({ kind: "punct", value: p, loc: loc(i) });
+    push({ kind: "punct", value: p, loc: loc(i) });
     i += p.length;
   }
   tokens.push({ kind: "eof", value: "", loc: loc(i) });

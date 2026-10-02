@@ -42,6 +42,7 @@ export interface EngineOptions {
   storage: Storage;
   fuel?: number;
   now?: () => Date;
+  previous?: Engine; // when the model is reloaded, keep the earlier runs
 }
 
 class StepFailure extends Error {
@@ -53,10 +54,14 @@ class StepFailure extends Error {
 export class Engine {
   private jsSteps = new Map<string, JsStepFn>();
   private tables = new Map<string, Map<string, TableStore>>(); // module -> table name -> store
-  private traceId = 0;
+  traceId = 0;
   readonly traces: Trace[] = [];
 
   constructor(readonly analysis: Analysis, private opts: EngineOptions) {
+    if (opts.previous) {
+      this.traces.push(...opts.previous.traces);
+      this.traceId = opts.previous.traceId;
+    }
     for (const m of analysis.modules.values()) {
       const own = new Map<string, TableStore>();
       for (const t of m.tables) own.set(t.name, new TableStore(opts.storage.db, t, analysis.records));

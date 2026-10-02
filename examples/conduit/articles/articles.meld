@@ -1,6 +1,8 @@
+/// Articles: writing, changing and deleting them, listing and searching them, favorites, the personal feed, and tags.
 module articles "Articles, favorites and tags" {
   uses users.authenticate, users.require_user, users.profiles, users.resolve_names, users.followed_ids
 
+  /// One row per article, with its address (slug), text, tags, author and dates.
   table article {
     slug: text unique
     title: text
@@ -12,6 +14,7 @@ module articles "Articles, favorites and tags" {
     updatedAt: text
   }
 
+  /// Who favorited which article: one row per favorite.
   table favorite {
     articleId: number
     userId: number
@@ -20,6 +23,7 @@ module articles "Articles, favorites and tags" {
   // ---- helpers ----
 
   // "Hello, World!" -> "hello-world"
+  /// Turns a title into a web-address-friendly name: lowercase letters and digits joined by dashes.
   fn slugify (title: text) -> text {
     let out = ""
     let gap = false
@@ -37,10 +41,12 @@ module articles "Articles, favorites and tags" {
     return out == "" ? "article" : out
   }
 
+  /// How many articles a page shows: 20 unless the caller asked for a different number.
   fn page_size (limit: number | null) -> number {
     return limit == null ? 20 : limit
   }
 
+  /// Lists the title, description or body that were sent empty.
   fn blank_errors (article: ArticleChanges) -> map<list<text>> {
     let errors = {}
     for (let field of ["title", "description", "body"]) {
@@ -51,6 +57,8 @@ module articles "Articles, favorites and tags" {
     return errors
   }
 
+  /// Turns a stored article into what the app sends back, with its author and favorite count.
+  /// Lists leave the full text out.
   fn article_view (row: row<article>, author: Profile, favorited: bool, favoritesCount: number, withBody: bool) -> Article {
     let view = {
       slug: row.slug,
@@ -71,6 +79,7 @@ module articles "Articles, favorites and tags" {
 
   // ---- finding articles ----
 
+  /// Finds an article by its address (slug).
   step find "Find an article" (slug: text)
     -> found(row: row<article>)
      | missing(errors: map<list<text>>)
@@ -83,6 +92,9 @@ module articles "Articles, favorites and tags" {
     return found(row: row)
   }
 
+  /// Lists articles, newest first, one page at a time.
+  /// Can narrow the list to one tag, one author, or the articles one person favorited.
+  /// Also counts how many articles match in total.
   step list "List articles" (tag?: text, authorId: number | null, favoriterId: number | null, noMatch: bool, limit?: number, offset?: number)
     -> page(rows: list<row<article>>, count: number)
     uses db
@@ -104,6 +116,7 @@ module articles "Articles, favorites and tags" {
     return page(rows: rows, count: db.article.count(where))
   }
 
+  /// Lists the articles written by the given authors, newest first, one page at a time.
   step feed "List articles by people you follow" (authorIds: list<number>, limit?: number, offset?: number)
     -> page(rows: list<row<article>>, count: number)
     uses db
@@ -113,6 +126,7 @@ module articles "Articles, favorites and tags" {
     return page(rows: rows, count: db.article.count(where))
   }
 
+  /// Lists every tag used on any article, each once.
   step tags "List all tags" ()
     -> found(tags: list<text>)
     uses db
@@ -125,6 +139,7 @@ module articles "Articles, favorites and tags" {
   }
 
   // Adds favorites and the author to articles, as seen by the viewer.
+  /// Prepares articles for the response: adds each one's author, how many people favorited it, and whether the caller did.
   step present "Prepare articles for the response" (rows: list<row<article>>, viewer: number | null, profiles: map<Profile>, withBody: bool)
     -> ready(articles: list<Article>)
     uses db
@@ -139,6 +154,8 @@ module articles "Articles, favorites and tags" {
 
   // ---- changing articles ----
 
+  /// Checks that a title, a description and a body were given.
+  /// Saves the article with its tags and gives it a unique address based on its title.
   step create "Write an article" (article: NewArticle, authorId: number)
     -> created(row: row<article>)
      | invalid(errors: map<list<text>>)
@@ -162,6 +179,9 @@ module articles "Articles, favorites and tags" {
     return created(row: row)
   }
 
+  /// Changes an article, but only for its author.
+  /// Only the parts that were sent change; the address stays the same.
+  /// A title, description or body can't be emptied.
   step edit "Change an article" (slug: text, userId: number, changes: ArticleChanges)
     -> edited(row: row<article>)
      | missing(errors: map<list<text>>)
@@ -190,6 +210,7 @@ module articles "Articles, favorites and tags" {
     return edited(row: db.article.get(row.id))
   }
 
+  /// Deletes an article and its favorites, but only for its author.
   step remove "Delete an article" (slug: text, userId: number)
     -> removed
      | missing(errors: map<list<text>>)
@@ -208,6 +229,8 @@ module articles "Articles, favorites and tags" {
     return removed()
   }
 
+  /// Marks the article as a favorite of the caller.
+  /// Favoriting twice changes nothing.
   step favorite "Favorite an article" (slug: text, userId: number)
     -> done(row: row<article>)
      | missing(errors: map<list<text>>)
@@ -223,6 +246,7 @@ module articles "Articles, favorites and tags" {
     return done(row: row)
   }
 
+  /// Removes the article from the caller's favorites.
   step unfavorite "Unfavorite an article" (slug: text, userId: number)
     -> done(row: row<article>)
      | missing(errors: map<list<text>>)
@@ -238,6 +262,7 @@ module articles "Articles, favorites and tags" {
 
   // ---- endpoints ----
 
+  /// Lists articles for anyone, newest first, optionally by tag, author or who favorited them.
   flow list_articles "List articles" on GET "/api/articles"
     (tag?: text, author?: text, favorited?: text, limit?: number, offset?: number, auth?: text from header "Authorization")
   {
@@ -250,6 +275,7 @@ module articles "Articles, favorites and tags" {
     respond 401 { errors: me.invalid.errors }
   }
 
+  /// Lists the newest articles by the people the signed-in person follows.
   flow get_feed "Articles by people you follow" on GET "/api/articles/feed"
     (limit?: number, offset?: number, auth?: text from header "Authorization")
   {
@@ -263,6 +289,7 @@ module articles "Articles, favorites and tags" {
     respond 401 { errors: me.invalid.errors }
   }
 
+  /// Shows one article in full.
   flow get_article "Get an article" on GET "/api/articles/:slug" (slug: text, auth?: text from header "Authorization") {
     me = users.authenticate(header: auth)
     when me.viewer a = find(slug: slug)
@@ -273,6 +300,7 @@ module articles "Articles, favorites and tags" {
     respond 401 { errors: me.invalid.errors }
   }
 
+  /// Lets the signed-in person write a new article.
   flow create_article "Write an article" on POST "/api/articles" (article: NewArticle, auth?: text from header "Authorization") {
     me = users.require_user(header: auth)
     c = create(article: article, authorId: me.user.id)
@@ -284,6 +312,7 @@ module articles "Articles, favorites and tags" {
     respond 401 { errors: me.invalid.errors }
   }
 
+  /// Lets an article's author change it.
   flow update_article "Change an article" on PUT "/api/articles/:slug" (slug: text, article: ArticleChanges, auth?: text from header "Authorization") {
     me = users.require_user(header: auth)
     e = edit(slug: slug, userId: me.user.id, changes: article)
@@ -297,6 +326,7 @@ module articles "Articles, favorites and tags" {
     respond 401 { errors: me.invalid.errors }
   }
 
+  /// Lets an article's author delete it.
   flow delete_article "Delete an article" on DELETE "/api/articles/:slug" (slug: text, auth?: text from header "Authorization") {
     me = users.require_user(header: auth)
     d = remove(slug: slug, userId: me.user.id)
@@ -307,6 +337,7 @@ module articles "Articles, favorites and tags" {
     respond 401 { errors: me.invalid.errors }
   }
 
+  /// The signed-in person favorites an article.
   flow favorite_article "Favorite an article" on POST "/api/articles/:slug/favorite" (slug: text, auth?: text from header "Authorization") {
     me = users.require_user(header: auth)
     f = favorite(slug: slug, userId: me.user.id)
@@ -318,6 +349,7 @@ module articles "Articles, favorites and tags" {
     respond 401 { errors: me.invalid.errors }
   }
 
+  /// The signed-in person removes an article from their favorites.
   flow unfavorite_article "Unfavorite an article" on DELETE "/api/articles/:slug/favorite" (slug: text, auth?: text from header "Authorization") {
     me = users.require_user(header: auth)
     f = unfavorite(slug: slug, userId: me.user.id)
@@ -329,6 +361,7 @@ module articles "Articles, favorites and tags" {
     respond 401 { errors: me.invalid.errors }
   }
 
+  /// Lists all tags in use.
   flow get_tags "List tags" on GET "/api/tags" () {
     t = tags()
     respond 200 { tags: t.found.tags }

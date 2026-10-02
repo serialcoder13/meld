@@ -77,6 +77,7 @@ export type Stmt =
 // ---- model -------------------------------------------------------------------
 
 export interface RecordDef {
+  doc?: string; // plain-language explanation, from /// lines above the declaration
   name: string;
   title?: string;
   fields: Field[];
@@ -94,6 +95,7 @@ export const PORTS: readonly PortName[] = ["store", "db", "clock", "log", "ids",
 
 // A table owned by one module. Every row also has an automatic `id: number`.
 export interface TableDef {
+  doc?: string; // plain-language explanation, from /// lines above the declaration
   module: string;
   name: string;
   fields: Field[];
@@ -103,6 +105,7 @@ export interface TableDef {
 
 // A pure helper function: no ports, callable from the module's steps and flows.
 export interface FnDef {
+  doc?: string; // plain-language explanation, from /// lines above the declaration
   module: string;
   name: string;
   params: Field[];
@@ -113,6 +116,7 @@ export interface FnDef {
 }
 
 export interface StepDef {
+  doc?: string; // plain-language explanation, from /// lines above the declaration
   module: string;
   name: string;
   title?: string;
@@ -144,6 +148,7 @@ export interface HttpTrigger {
 }
 
 export interface FlowDef {
+  doc?: string; // plain-language explanation, from /// lines above the declaration
   module: string;
   name: string;
   title?: string;
@@ -161,6 +166,7 @@ export interface UseDef {
 }
 
 export interface ModuleDef {
+  doc?: string; // plain-language explanation, from /// lines above the declaration
   name: string;
   title?: string;
   dir: string; // folder holding the module's .meld file; its JS code must live here
@@ -173,6 +179,7 @@ export interface ModuleDef {
 }
 
 export interface AppDef {
+  doc?: string; // plain-language explanation, from /// lines above the declaration
   name: string;
   title?: string;
   loc: Loc;

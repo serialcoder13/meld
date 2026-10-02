@@ -99,6 +99,7 @@ function StepNode({ id, data }: NodeProps<Node<StepData>>) {
             </div>
           </div>
         </div>
+        {step.doc && <div className="mt-2 line-clamp-2 text-[11.5px] leading-snug text-gray-500">{step.doc.split("\n")[0]}</div>}
       </div>
       <div className="flex gap-4 px-4 pt-3 pb-3">
         <div className="min-w-0 flex-1">

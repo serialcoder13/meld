@@ -5,14 +5,16 @@ import { parseFile } from "./parser";
 
 // Loads every .meld file under a folder into one model. Each module's folder
 // is the folder of the .meld file that declares it.
-export function loadModel(root: string): { model: Model; diagnostics: Diagnostic[] } {
+// `overrides` replaces file contents in memory, so a proposed edit can be
+// checked before anything is written.
+export function loadModel(root: string, overrides?: Map<string, string>): { model: Model; diagnostics: Diagnostic[] } {
   const absRoot = resolve(root);
   const model: Model = { root: absRoot, records: [], modules: [] };
   const diagnostics: Diagnostic[] = [];
   for (const file of findMeldFiles(absRoot)) {
     const dir = file.slice(0, file.lastIndexOf("/"));
     try {
-      const parsed = parseFile(readFileSync(file, "utf8"), file, dir);
+      const parsed = parseFile(overrides?.get(file) ?? readFileSync(file, "utf8"), file, dir);
       if (parsed.app) {
         if (model.app) diagnostics.push({ loc: parsed.app.loc, message: `The app is already declared in ${model.app.loc.file}.` });
         else model.app = parsed.app;

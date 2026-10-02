@@ -40,15 +40,35 @@ module orders "Orders" {
 
 ## Meld Studio
 
-`bun src/cli.ts studio examples/conduit` runs the app and opens a visual view of it at `/_meld/studio` (design hints from kirun-ui):
+`bun src/cli.ts studio examples/conduit` runs the app and opens a visual view of it at `/_meld/studio` (design hints from kirun-ui). People see explanations, never code:
 
 - **App map:** every module with its endpoints, and arrows for which module uses which.
+- **Tree (left):** modules → endpoints → the steps, tables and responses inside each endpoint. Search filters the tree and highlights matches.
 - **Module page:** what a module owns (endpoints, steps, tables, helpers), what it depends on and who depends on it.
-- **Flow canvas:** the endpoint, each step as a card (inputs on the left, outcomes as connectors on the right) and every possible response, laid out automatically.
-- **Detail panel:** for any step, its contract, what it touches, every place it's used across the app (click to jump there), and its code.
-- **Try it:** send a real request and watch the path it took light up; recent runs can be replayed on the canvas.
+- **Flow canvas:** the endpoint, each step as a card (inputs on the left, outcomes as connectors on the right) and every possible response.
+- **Piece view:** one step with everything around it: every endpoint that uses it, what each of its outcomes leads to there, and the tables it touches.
+- **Detail panel:** a step's explanation, contract, what it touches, every place it's used, and its title, all editable.
+- **Try it:** send a real request and watch the path it took light up.
 
-The studio reads the same analysis the runtime runs, so the picture can't drift from the app. Run it from the repo root so Bun picks up the Tailwind plugin in `bunfig.toml`.
+### Changing the app
+
+Explanations are `///` lines above each declaration in the `.meld` files. In the studio, a person can:
+
+- **Change an explanation and press "Make it do this".** The AI agent rewrites the step or endpoint to match, Meld checks the whole app (the AI retries up to three times with the problems Meld found), and the person sees a plain-language summary to **Apply** or **Discard**. Applied changes are written to the `.meld` files and the running app reloads without a restart.
+- **Ask for a change** in plain words, with the same check-and-approve loop.
+- **Write missing explanations** with the AI, or fix only the wording.
+- **Rename** titles.
+
+Set up the agent under **Set up AI** (provider, model and key): Anthropic (default `claude-opus-5-5`), OpenAI, or any OpenAI-compatible endpoint (Ollama, OpenRouter, Groq, ...). The key is stored in `~/.config/meld/agent.json` (readable only by you), never in the project; `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` work too. With Anthropic, a declined request is retried on a fallback model (server-side fallback; can be turned off). The studio only listens on 127.0.0.1 and refuses changes that don't come from its own page.
+
+The language reference the agent follows is [docs/meld-language.md](docs/meld-language.md).
+
+Run the studio from the repo root so Bun picks up the Tailwind plugin in `bunfig.toml`.
+
+## VS Code and Claude Code
+
+- [`editors/vscode`](editors/vscode): a VS Code extension with highlighting, live `meld check` problems on save (including changes made by the studio or an agent), **Who Uses This Step**, and **Meld Studio in an editor tab** opened at the step under the cursor.
+- **Claude Code:** `meld skill install <project>` adds a Meld skill in `.claude/skills/meld/` (how to work on a Meld app, plus the same language reference the studio's agent uses). This repo has it installed. With it, Claude Code edits `.meld` files the Meld way: understand with `meld explain` / `who-uses`, keep `///` explanations true, and run `meld check` until it's clean.
 
 ## What the checker guarantees
 
@@ -81,5 +101,6 @@ bun test
 - Integrations for npm packages
 - Real sandboxing of JS steps
 - Stable IDs for semantic diffs
-- Editing in the studio (it's a viewer for now)
+- Changes that span several declarations at once (the agent edits one step, endpoint or helper at a time)
+- Type checking inside step bodies (types are checked at every boundary, but a mistake inside a body shows up only when it runs)
 - Decimal money

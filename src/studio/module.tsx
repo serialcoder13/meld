@@ -1,5 +1,6 @@
 import { Boxes, Code2, Database, FunctionSquare, Globe, Workflow } from "lucide-react";
 import type { ReactNode } from "react";
+import { EditableTitle, ExplanationEditor } from "./edit";
 import { Category, IconBox } from "./flow";
 import { colorFor, fieldLabel, METHOD_COLORS, PORT_HELP } from "./util";
 import type { AppView, ModuleView } from "./view";
@@ -35,12 +36,14 @@ export function ModulePage({
   openFlow,
   openStep,
   openModule,
+  changed,
 }: {
   view: AppView;
   module: ModuleView;
   openFlow: (key: string) => void;
   openStep: (key: string) => void;
   openModule: (name: string) => void;
+  changed: () => void;
 }) {
   const color = colorFor(m.name);
   const dependsOn = view.links.filter((l) => l.from === m.name);
@@ -53,9 +56,15 @@ export function ModulePage({
         </IconBox>
         <div>
           <Category>Module</Category>
-          <h1 className="text-[24px] font-semibold text-gray-800">{m.title ?? m.name}</h1>
+          <h1 className="text-[24px] font-semibold text-gray-800">
+            <EditableTitle target={{ kind: "module", module: m.name, name: m.name }} title={m.title ?? m.name} onChanged={changed} />
+          </h1>
           <div className="meld-code text-[12px] text-gray-500">{m.name}</div>
         </div>
+      </div>
+
+      <div className="mt-4 max-w-3xl">
+        <ExplanationEditor key={`${m.name}:${m.doc ?? ""}`} target={{ kind: "module", module: m.name, name: m.name }} doc={m.doc} onChanged={changed} />
       </div>
 
       <div className="mt-5 flex flex-wrap gap-6 text-[13px]">
@@ -87,6 +96,7 @@ export function ModulePage({
               <span className="meld-code truncate text-[12px] text-gray-600">{f.path}</span>
             </div>
             <div className="mt-2 text-[15px] font-semibold text-gray-800">{f.title ?? f.name}</div>
+            {f.doc && <div className="mt-1 line-clamp-2 text-[12px] text-gray-600">{f.doc}</div>}
             <div className="mt-1 text-[12px] text-gray-500">
               {plural(f.nodes.filter((n) => n.kind === "do").length, "step")} · {plural(f.nodes.filter((n) => n.kind === "respond").length, "possible response")}
             </div>
@@ -108,6 +118,7 @@ export function ModulePage({
                 </span>
               )}
             </div>
+            {s.doc && <div className="mt-1.5 line-clamp-2 text-[12px] text-gray-600">{s.doc}</div>}
             <div className="mt-2 text-[12px] text-gray-600">
               <span className="text-gray-400">takes </span>
               {s.inputs.map((i) => i.name).join(", ") || "nothing"}
@@ -138,6 +149,7 @@ export function ModulePage({
           {m.tables.map((t) => (
             <div key={t.name} className="meld-card p-4">
               <div className="text-[15px] font-semibold text-gray-800">{t.name}</div>
+              {t.doc && <div className="mt-1 text-[12px] text-gray-600">{t.doc}</div>}
               <div className="mt-2 text-[12px]">
                 <div className="flex justify-between border-b border-gray-50 py-1">
                   <span className="meld-code text-gray-700">id</span>
@@ -167,7 +179,7 @@ export function ModulePage({
               <div className="meld-code mt-1 text-[11px] text-gray-500">
                 ({f.params.map(fieldLabel).join(", ")}) → {f.returns}
               </div>
-              <pre className="meld-code mt-2 max-h-48 overflow-auto rounded bg-gray-50 p-2 text-[11px] text-gray-600">{f.source.code}</pre>
+              <div className="mt-2 text-[12px] whitespace-pre-wrap text-gray-600">{f.doc ?? <span className="text-gray-400">No explanation yet.</span>}</div>
             </div>
           ))}
         </Section>

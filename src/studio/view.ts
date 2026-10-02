@@ -1,7 +1,6 @@
-import { readFileSync } from "node:fs";
 import type { Analysis } from "../check";
 import { printExpr } from "../explain";
-import { stepKey, typeToString, type Expr, type Field } from "../ir";
+import { stepKey, typeToString, type Expr, type Field, type StepDef, type Stmt } from "../ir";
 
 // The studio's picture of the app, built from the same analysis the runtime
 // uses, so what you see is what runs.
@@ -14,10 +13,10 @@ export interface FieldView {
   header?: string;
 }
 
+// Where a declaration lives, for editors. The studio never shows code itself.
 export interface Source {
   file: string; // relative to the app folder
   line: number;
-  code: string;
 }
 
 export interface StepView {
@@ -25,9 +24,11 @@ export interface StepView {
   module: string;
   name: string;
   title?: string;
+  doc?: string;
   inputs: FieldView[];
   outcomes: { name: string; fields: FieldView[] }[];
   ports: string[];
+  tables: string[]; // tables it reads or writes
   lang: "meld" | "js";
   source: Source;
   usedBy: {
@@ -57,6 +58,7 @@ export interface FlowView {
   module: string;
   name: string;
   title?: string;
+  doc?: string;
   method: string;
   path: string;
   inputs: FieldView[];
@@ -67,9 +69,10 @@ export interface FlowView {
 export interface ModuleView {
   name: string;
   title?: string;
+  doc?: string;
   uses: string[];
-  tables: { name: string; fields: FieldView[]; source: Source }[];
-  fns: { name: string; params: FieldView[]; returns: string; source: Source }[];
+  tables: { name: string; doc?: string; fields: FieldView[]; source: Source }[];
+  fns: { name: string; doc?: string; params: FieldView[]; returns: string; source: Source }[];
   steps: StepView[];
   flows: FlowView[];
 }
@@ -83,16 +86,10 @@ export interface AppView {
 
 export function buildView(a: Analysis): AppView {
   const root = a.model.root;
-  const files = new Map<string, string[]>();
-  const source = (loc: { file: string; line: number }, endLine?: number): Source => {
-    let lines = files.get(loc.file);
-    if (!lines) {
-      lines = readFileSync(loc.file, "utf8").split("\n");
-      files.set(loc.file, lines);
-    }
-    const code = lines.slice(loc.line - 1, endLine ?? loc.line).join("\n");
-    return { file: loc.file.startsWith(root + "/") ? loc.file.slice(root.length + 1) : loc.file, line: loc.line, code: dedent(code) };
-  };
+  const source = (loc: { file: string; line: number }, _endLine?: number): Source => ({
+    file: loc.file.startsWith(root + "/") ? loc.file.slice(root.length + 1) : loc.file,
+    line: loc.line,
+  });
   const field = (f: Field): FieldView => ({
     name: f.name,
     type: typeToString(f.type),
@@ -104,9 +101,10 @@ export function buildView(a: Analysis): AppView {
   const modules: ModuleView[] = [...a.modules.values()].map((m) => ({
     name: m.name,
     title: m.title,
+    doc: m.doc,
     uses: m.uses.map((u) => stepKey(u.module, u.step)),
-    tables: m.tables.map((t) => ({ name: t.name, fields: t.fields.map(field), source: source(t.loc, t.endLine) })),
-    fns: m.fns.map((fn) => ({ name: fn.name, params: fn.params.map(field), returns: typeToString(fn.returns), source: source(fn.loc, fn.endLine) })),
+    tables: m.tables.map((t) => ({ name: t.name, doc: t.doc, fields: t.fields.map(field), source: source(t.loc, t.endLine) })),
+    fns: m.fns.map((fn) => ({ name: fn.name, doc: fn.doc, params: fn.params.map(field), returns: typeToString(fn.returns), source: source(fn.loc, fn.endLine) })),
     steps: m.steps.map((s) => {
       const key = stepKey(m.name, s.name);
       const usedBy = (a.usages.get(key) ?? []).map((u) => {
@@ -130,9 +128,11 @@ export function buildView(a: Analysis): AppView {
         module: m.name,
         name: s.name,
         title: s.title,
+        doc: s.doc,
         inputs: s.inputs.map(field),
         outcomes: s.outcomes.map((o) => ({ name: o.name, fields: o.fields.map(field) })),
         ports: s.ports.map((p) => p.name),
+        tables: tablesTouched(s, m.tables.map((t) => t.name)),
         lang: s.body.kind,
         source: s.body.kind === "js" ? jsSource(s.body.path, root) : source(s.loc, s.endLine),
         usedBy,
@@ -147,6 +147,7 @@ export function buildView(a: Analysis): AppView {
         module: m.name,
         name: f.name,
         title: f.title,
+        doc: f.doc,
         method: f.trigger.method,
         path: f.trigger.path,
         inputs: f.inputs.map(field),
@@ -190,44 +191,78 @@ export function buildView(a: Analysis): AppView {
 }
 
 function jsSource(path: string, root: string): Source {
-  return { file: path.startsWith(root + "/") ? path.slice(root.length + 1) : path, line: 1, code: readFileSync(path, "utf8") };
+  return { file: path.startsWith(root + "/") ? path.slice(root.length + 1) : path, line: 1 };
 }
 
-function dedent(code: string): string {
-  const lines = code.split("\n");
-  const indent = Math.min(...lines.filter((l) => l.trim()).map((l) => l.match(/^ */)![0].length));
-  return lines.map((l) => l.slice(indent)).join("\n");
+// Which of its module's tables a step reads or writes (db.<table>...).
+function tablesTouched(s: StepDef, tables: string[]): string[] {
+  if (!s.ports.some((p) => p.name === "db")) return [];
+  if (s.body.kind === "js") return tables; // can't see inside JavaScript; assume any
+  const found = new Set<string>();
+  const visitExpr = (e: Expr) =>
+    collectNames(e, () => {}, new Set(), (obj, name) => {
+      if (obj === "db" && tables.includes(name)) found.add(name);
+    });
+  const visit = (st: Stmt) => {
+    switch (st.kind) {
+      case "let":
+        return visitExpr(st.value);
+      case "assign":
+        visitExpr(st.target);
+        return visitExpr(st.value);
+      case "expr":
+        return visitExpr(st.expr);
+      case "return":
+        return visitExpr(st.value);
+      case "if":
+        visitExpr(st.test);
+        st.then.forEach(visit);
+        return st.else?.forEach(visit);
+      case "for":
+        visitExpr(st.iterable);
+        return st.body.forEach(visit);
+      case "while":
+        visitExpr(st.test);
+        return st.body.forEach(visit);
+      default:
+        return;
+    }
+  };
+  s.body.stmts.forEach(visit);
+  return [...found];
 }
 
-function collectNames(e: Expr, cb: (name: string) => void, locals = new Set<string>()) {
+function collectNames(e: Expr, cb: (name: string) => void, locals = new Set<string>(), onMember?: (object: string, name: string) => void): void {
+  const again = (x: Expr, l = locals): void => collectNames(x, cb, l, onMember);
   switch (e.kind) {
     case "name":
       if (!locals.has(e.name)) cb(e.name);
       return;
     case "member":
-      return collectNames(e.object, cb, locals);
+      if (e.object.kind === "name" && onMember) onMember(e.object.name, e.name);
+      return again(e.object);
     case "index":
-      collectNames(e.object, cb, locals);
-      return collectNames(e.index, cb, locals);
+      again(e.object);
+      return again(e.index);
     case "call":
-      collectNames(e.callee, cb, locals);
-      e.args.forEach((x) => collectNames(x, cb, locals));
-      return (e.named ?? []).forEach((x) => collectNames(x.value, cb, locals));
+      again(e.callee);
+      e.args.forEach((x) => again(x));
+      return (e.named ?? []).forEach((x) => again(x.value));
     case "list":
-      return e.items.forEach((x) => collectNames(x, cb, locals));
+      return e.items.forEach((x) => again(x));
     case "object":
-      return e.entries.forEach((x) => collectNames(x.value, cb, locals));
+      return e.entries.forEach((x) => again(x.value));
     case "unary":
-      return collectNames(e.operand, cb, locals);
+      return again(e.operand);
     case "binary":
-      collectNames(e.left, cb, locals);
-      return collectNames(e.right, cb, locals);
+      again(e.left);
+      return again(e.right);
     case "cond":
-      collectNames(e.test, cb, locals);
-      collectNames(e.then, cb, locals);
-      return collectNames(e.else, cb, locals);
+      again(e.test);
+      again(e.then);
+      return again(e.else);
     case "lambda":
-      return collectNames(e.body, cb, new Set([...locals, ...e.params]));
+      return again(e.body, new Set([...locals, ...e.params]));
     default:
       return;
   }

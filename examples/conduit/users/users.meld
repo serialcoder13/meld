@@ -1,5 +1,7 @@
+/// Everyone who uses Conduit: signing up and in, their profile, and who follows whom.
 module users "Users and profiles" {
 
+  /// One row per person: their name, email, a scrambled copy of their password, and their profile.
   table account {
     username: text unique
     email: text unique
@@ -8,6 +10,7 @@ module users "Users and profiles" {
     image: text | null
   }
 
+  /// Who follows whom: one row per person following another.
   table follow {
     followerId: number
     followedId: number
@@ -15,15 +18,18 @@ module users "Users and profiles" {
 
   // ---- helpers ----
 
+  /// Turns a stored person into what the app sends back about the signed-in person, including their token.
   fn user_view (row: row<account>, token: text) -> User {
     return { email: row.email, token: token, username: row.username, bio: row.bio, image: row.image }
   }
 
+  /// Turns a stored person into the public profile others see.
   fn profile_view (row: row<account>, following: bool) -> Profile {
     return { username: row.username, bio: row.bio, image: row.image, following: following }
   }
 
   // An empty bio or image means "none".
+  /// Treats an empty bio or picture as "none".
   fn blank_to_null (value: text | null) -> text | null {
     if (value == null || value.trim() == "") {
       return null
@@ -32,6 +38,7 @@ module users "Users and profiles" {
   }
 
   // "Token abc" -> "abc"
+  /// Takes the token out of the "Token ..." or "Bearer ..." header the browser sends.
   fn token_in (header: text) -> text | null {
     for (let prefix of ["Token ", "Bearer "]) {
       if (header.startsWith(prefix)) {
@@ -43,6 +50,9 @@ module users "Users and profiles" {
 
   // ---- signing up and in ----
 
+  /// Checks that a username, an email and a password of at least 8 characters were given.
+  /// Refuses the sign-up if the username or the email is already taken.
+  /// Otherwise saves the new person, with their password scrambled, and signs them in.
   step register "Sign up" (user: NewUser)
     -> registered(user: User)
      | invalid(errors: map<list<text>>)
@@ -80,6 +90,9 @@ module users "Users and profiles" {
     return registered(user: user_view(row, crypto.sign({ uid: row.id })))
   }
 
+  /// Checks that an email and a password were given.
+  /// Finds the person by email and checks the password.
+  /// Says "wrong" without telling which of the two was wrong.
   step login "Sign in" (user: Login)
     -> signed_in(user: User)
      | invalid(errors: map<list<text>>)
@@ -106,6 +119,9 @@ module users "Users and profiles" {
   // ---- who is calling ----
 
   // For endpoints that work with or without a signed-in user.
+  /// Works out who is calling from the token they sent, if any.
+  /// No token is fine: the caller is just anonymous.
+  /// A token that is broken, forged or belongs to a removed person is refused.
   step authenticate "Find out who is calling" (header: text | null)
     -> viewer(id: number | null)
      | invalid(errors: map<list<text>>)
@@ -123,6 +139,8 @@ module users "Users and profiles" {
   }
 
   // For endpoints that need a signed-in user.
+  /// Makes sure the caller is signed in.
+  /// Says "missing" when no token was sent, and "invalid" when the token can't be trusted.
   step require_user "Check the caller is signed in" (header: text | null)
     -> user(id: number)
      | missing(errors: map<list<text>>)
@@ -142,6 +160,7 @@ module users "Users and profiles" {
 
   // ---- the signed-in user ----
 
+  /// Loads the signed-in person and gives them a fresh token.
   step current "Load the signed-in user" (id: number)
     -> found(user: User)
     uses db, crypto
@@ -149,6 +168,10 @@ module users "Users and profiles" {
     return found(user: user_view(db.account.get(id), crypto.sign({ uid: id })))
   }
 
+  /// Changes the signed-in person's username, email, password, bio or picture: only the ones that were sent.
+  /// A username or email can't be emptied, and a new password needs at least 8 characters.
+  /// A username or email that someone else already has is refused.
+  /// An empty bio or picture is stored as none.
   step update "Change the signed-in user" (id: number, changes: UserChanges)
     -> updated(user: User)
      | invalid(errors: map<list<text>>)
@@ -201,6 +224,8 @@ module users "Users and profiles" {
 
   // ---- profiles ----
 
+  /// Looks up a person's public profile by username.
+  /// Also says whether the caller follows them.
   step profile "Look up a profile" (username: text, viewer: number | null)
     -> found(profile: Profile)
      | missing(errors: map<list<text>>)
@@ -214,6 +239,8 @@ module users "Users and profiles" {
     return found(profile: profile_view(row, following))
   }
 
+  /// Makes the caller follow the person with this username.
+  /// Following someone twice changes nothing.
   step follow_user "Follow someone" (username: text, viewer: number)
     -> followed(profile: Profile)
      | missing(errors: map<list<text>>)
@@ -229,6 +256,7 @@ module users "Users and profiles" {
     return followed(profile: profile_view(row, true))
   }
 
+  /// Makes the caller stop following the person with this username.
   step unfollow_user "Stop following someone" (username: text, viewer: number)
     -> unfollowed(profile: Profile)
      | missing(errors: map<list<text>>)
@@ -245,6 +273,8 @@ module users "Users and profiles" {
   // ---- used by other modules ----
 
   // Profiles keyed by user id (as text), as seen by the viewer.
+  /// Looks up the public profiles of several people at once, as the caller sees them.
+  /// Used to show who wrote each article or comment.
   step profiles "Look up several profiles" (ids: list<number>, viewer: number | null)
     -> found(profiles: map<Profile>)
     uses db
@@ -261,6 +291,8 @@ module users "Users and profiles" {
   }
 
   // Turns usernames from a query into ids. noMatch: a name was given but no such user exists.
+  /// Turns the usernames in a search ("by this author", "favorited by") into people.
+  /// Says when a name doesn't belong to anyone, so the search can return nothing.
   step resolve_names "Turn usernames into ids" (author?: text, favorited?: text)
     -> resolved(authorId: number | null, favoriterId: number | null, noMatch: bool)
     uses db
@@ -275,6 +307,7 @@ module users "Users and profiles" {
     )
   }
 
+  /// Lists everyone the caller follows.
   step followed_ids "List who someone follows" (viewer: number)
     -> found(ids: list<number>)
     uses db
@@ -284,6 +317,7 @@ module users "Users and profiles" {
 
   // ---- endpoints ----
 
+  /// Creates an account and signs the new person in.
   flow sign_up "Sign up" on POST "/api/users" (user: NewUser) {
     r = register(user: user)
     respond 201 { user: r.registered.user }
@@ -291,6 +325,7 @@ module users "Users and profiles" {
     respond 409 { errors: r.taken.errors }
   }
 
+  /// Signs a person in with their email and password.
   flow sign_in "Sign in" on POST "/api/users/login" (user: Login) {
     r = login(user: user)
     respond 200 { user: r.signed_in.user }
@@ -298,6 +333,7 @@ module users "Users and profiles" {
     respond 401 { errors: r.wrong.errors }
   }
 
+  /// Shows the signed-in person their own account.
   flow get_current_user "Get the signed-in user" on GET "/api/user" (auth?: text from header "Authorization") {
     me = require_user(header: auth)
     u = current(id: me.user.id)
@@ -306,6 +342,7 @@ module users "Users and profiles" {
     respond 401 { errors: me.invalid.errors }
   }
 
+  /// Lets the signed-in person change their account and profile.
   flow update_current_user "Update the signed-in user" on PUT "/api/user" (user: UserChanges, auth?: text from header "Authorization") {
     me = require_user(header: auth)
     u = update(id: me.user.id, changes: user)
@@ -316,6 +353,7 @@ module users "Users and profiles" {
     respond 401 { errors: me.invalid.errors }
   }
 
+  /// Shows anyone's public profile; signed-in callers also see whether they follow them.
   flow get_profile "Get a profile" on GET "/api/profiles/:username" (username: text, auth?: text from header "Authorization") {
     me = authenticate(header: auth)
     p = profile(username: username, viewer: me.viewer.id)
@@ -324,6 +362,7 @@ module users "Users and profiles" {
     respond 401 { errors: me.invalid.errors }
   }
 
+  /// The signed-in person starts following someone.
   flow follow "Follow a user" on POST "/api/profiles/:username/follow" (username: text, auth?: text from header "Authorization") {
     me = require_user(header: auth)
     f = follow_user(username: username, viewer: me.user.id)
@@ -333,6 +372,7 @@ module users "Users and profiles" {
     respond 401 { errors: me.invalid.errors }
   }
 
+  /// The signed-in person stops following someone.
   flow unfollow "Unfollow a user" on DELETE "/api/profiles/:username/follow" (username: text, auth?: text from header "Authorization") {
     me = require_user(header: auth)
     f = unfollow_user(username: username, viewer: me.user.id)

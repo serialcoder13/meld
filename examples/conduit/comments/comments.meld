@@ -1,6 +1,8 @@
+/// Comments on articles: reading, writing and deleting them.
 module comments "Comments on articles" {
   uses users.authenticate, users.require_user, users.profiles, articles.find
 
+  /// One row per comment: which article, who wrote it, the text and when.
   table comment {
     articleId: number
     authorId: number
@@ -9,6 +11,7 @@ module comments "Comments on articles" {
     updatedAt: text
   }
 
+  /// Turns stored comments into what the app sends back, each with its author.
   fn comment_views (rows: list<row<comment>>, profiles: map<Profile>) -> list<Comment> {
     return rows.map(row => ({
       id: row.id,
@@ -19,6 +22,7 @@ module comments "Comments on articles" {
     }))
   }
 
+  /// Saves a comment on the article, unless the text is empty.
   step add "Write a comment" (articleId: number, authorId: number, comment: NewComment)
     -> added(row: row<comment>)
      | invalid(errors: map<list<text>>)
@@ -31,6 +35,7 @@ module comments "Comments on articles" {
     return added(row: db.comment.insert({ articleId: articleId, authorId: authorId, body: comment.body, createdAt: now, updatedAt: now }))
   }
 
+  /// Lists an article's comments, oldest first.
   step list_for "List an article's comments" (articleId: number)
     -> found(rows: list<row<comment>>)
     uses db
@@ -38,6 +43,7 @@ module comments "Comments on articles" {
     return found(rows: db.comment.list({ articleId: articleId }))
   }
 
+  /// Deletes a comment, but only for the person who wrote it.
   step remove "Delete a comment" (articleId: number, id: number, userId: number)
     -> removed
      | missing(errors: map<list<text>>)
@@ -57,6 +63,7 @@ module comments "Comments on articles" {
 
   // ---- endpoints ----
 
+  /// Shows an article's comments to anyone.
   flow list_comments "List comments" on GET "/api/articles/:slug/comments" (slug: text, auth?: text from header "Authorization") {
     me = users.authenticate(header: auth)
     when me.viewer a = articles.find(slug: slug)
@@ -67,6 +74,7 @@ module comments "Comments on articles" {
     respond 401 { errors: me.invalid.errors }
   }
 
+  /// Lets the signed-in person comment on an article.
   flow add_comment "Write a comment" on POST "/api/articles/:slug/comments" (slug: text, comment: NewComment, auth?: text from header "Authorization") {
     me = users.require_user(header: auth)
     when me.user a = articles.find(slug: slug)
@@ -79,6 +87,7 @@ module comments "Comments on articles" {
     respond 401 { errors: me.invalid.errors }
   }
 
+  /// Lets a comment's author delete it.
   flow delete_comment "Delete a comment" on DELETE "/api/articles/:slug/comments/:id" (slug: text, id: number, auth?: text from header "Authorization") {
     me = users.require_user(header: auth)
     when me.user a = articles.find(slug: slug)

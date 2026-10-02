@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { MeldAgent } from "../src/agent/agent";
+import { draftDoc, draftTitle, writeDraft } from "../src/edit";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { analyze } from "../src/check";
@@ -226,6 +228,109 @@ describe("conduit", () => {
     const messages = analyze(model).diagnostics.map((d) => d.message).join("\n");
     expect(messages).toContain("respond 404");
     expect(messages).toContain("could both happen");
+  });
+});
+
+describe("editing with the agent", () => {
+  const SHOP = join(import.meta.dir, "..", "examples", "shop");
+  const copyShop = () => {
+    const root = mkdtempSync(join(tmpdir(), "meld-shop-"));
+    cpSync(SHOP, root, { recursive: true });
+    return root;
+  };
+  const analysisOf = (root: string) => {
+    const { model } = loadModel(root);
+    return analyze(model);
+  };
+  const target = { kind: "step" as const, module: "inventory", name: "add_stock" };
+
+  test("explanations are /// lines attached to declarations", () => {
+    const root = copyShop();
+    const d = draftDoc(analysisOf(root), target, "Adds stock for one product.\nRefuses quantities of zero or less.");
+    expect(d.problems).toEqual([]);
+    writeDraft(d);
+    const step = analysisOf(root).steps.get("inventory.add_stock")!;
+    expect(step.doc).toBe("Adds stock for one product.\nRefuses quantities of zero or less.");
+    expect(readFileSync(join(root, "inventory/inventory.meld"), "utf8")).toContain("  /// Refuses quantities of zero or less.\n  step add_stock");
+  });
+
+  test("a changed explanation becomes new code, repaired until the checker accepts it", async () => {
+    const root = copyShop();
+    const replies = [
+      `<summary>Adding more than 1000 at once is now refused.</summary>
+<explanation>ignored: the person's own explanation is kept</explanation>
+<meld>
+step add_stock "Add stock" (sku: text, qty: number, price: money)
+  -> added(in_stock: number)
+   | rejected(reason: text)
+  uses store
+{
+  if (qty <= 0 || qty > 1000) {
+    return rejected(reason: "Quantity must be between 1 and 1000")
+  }
+  let stock = store.get("stock." + sku, { qty: 0, price: price })
+  store.set("stock." + sku, { qty: stock.qty + qty, price: price })
+  return added(in_stock: stock.qty + qty)
+}
+</meld>`,
+    ];
+    const seen: string[] = [];
+    const llm = { complete: async (_s: string, user: string) => (seen.push(user), replies.shift()!) };
+    const agent = new MeldAgent(llm);
+    const doc = "Adds stock for one product.\nRefuses fewer than 1 or more than 1000 at once.";
+    const p = await agent.propose(analysisOf(root), target, { doc });
+    expect(p.attempts).toBe(1);
+    expect(p.problems).toEqual([]);
+    expect(p.doc).toBe(doc);
+    writeDraft(p.draft);
+    const after = readFileSync(join(root, "inventory/inventory.meld"), "utf8");
+    expect(after).toContain("/// Refuses fewer than 1 or more than 1000 at once.");
+    expect(after).toContain("qty > 1000");
+    // the prompt carried the context the model needs
+    expect(seen[0]).toContain("# Where this step is used");
+    expect(seen[0]).toContain("Refuses fewer than 1 or more than 1000 at once.");
+  });
+
+  test("checker problems are sent back to the model until they are fixed", async () => {
+    const root = copyShop();
+    const bad = `<summary>s</summary><explanation>e</explanation><meld>
+step add_stock "Add stock" (sku: text, qty: number, price: money)
+  -> added(in_stock: number)
+  uses store
+{
+  return added(in_stock: qty)
+}
+</meld>`;
+    const good = `<summary>Always adds.</summary><explanation>Adds stock.</explanation><meld>
+step add_stock "Add stock" (sku: text, qty: number, price: money)
+  -> added(in_stock: number)
+   | rejected(reason: text)
+  uses store
+{
+  if (qty <= 0) {
+    return rejected(reason: "too few")
+  }
+  return added(in_stock: qty)
+}
+</meld>`;
+    const replies = [bad, good];
+    const prompts: string[] = [];
+    const agent = new MeldAgent({ complete: async (_s, user) => (prompts.push(user), replies.shift()!) });
+    const p = await agent.propose(analysisOf(root), target, { instruction: "simplify it" });
+    expect(p.attempts).toBe(2);
+    expect(p.problems).toEqual([]);
+    // dropping the "rejected" outcome broke the restock flow, and the model was told so
+    expect(prompts[1]).toContain("didn't pass the Meld checker");
+    expect(prompts[1]).toContain("rejected");
+    expect(p.changes).toEqual([]);
+  });
+
+  test("titles can be changed without touching anything else", () => {
+    const root = copyShop();
+    const d = draftTitle(analysisOf(root), target, "Restock a product");
+    expect(d.problems).toEqual([]);
+    writeDraft(d);
+    expect(analysisOf(root).steps.get("inventory.add_stock")!.title).toBe("Restock a product");
   });
 });
 

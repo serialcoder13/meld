@@ -1,14 +1,14 @@
 import type { Engine } from "./engine";
 import type { Field, TypeRef } from "./ir";
-import studioPage from "./studio/index.html";
-import { buildView } from "./studio/view";
 
 // One Bun server. Every route comes from a flow in the model; there is no
 // other way to add one.
 
-type RouteRequest = Request & { params: Record<string, string> };
+export type RouteRequest = Request & { params: Record<string, string> };
+export type Routes = Record<string, unknown>;
 
-export function createServer(engine: Engine, port: number, opts: { studio?: boolean } = {}) {
+/** The app's routes, built from the model. Rebuilt whenever the model changes. */
+export function appRoutes(engine: Engine): Routes {
   const routes: Record<string, Record<string, (req: RouteRequest) => Promise<Response>>> = {};
   for (const plan of engine.analysis.plans) {
     const { method, path } = plan.flow.trigger;
@@ -36,18 +36,14 @@ export function createServer(engine: Engine, port: number, opts: { studio?: bool
       }),
   };
   routes["/_meld/traces"] = { GET: async () => Response.json([...engine.traces].reverse()) };
+  return routes;
+}
 
-  const studio = opts.studio ? { "/_meld/studio": studioPage, "/_meld/view": { GET: async () => Response.json(buildView(engine.analysis)) } } : {};
+export const notFound = (req: Request) =>
+  Response.json({ errors: { route: [`No flow handles ${req.method} ${new URL(req.url).pathname}.`] } }, { status: 404 });
 
-  return Bun.serve({
-    port,
-    development: opts.studio ? { hmr: false, console: false } : false,
-    routes: { ...routes, ...studio } as never,
-    fetch: (req) => {
-      const url = new URL(req.url);
-      return Response.json({ errors: { route: [`No flow handles ${req.method} ${url.pathname}.`] } }, { status: 404 });
-    },
-  });
+export function createServer(engine: Engine, port: number) {
+  return Bun.serve({ port, routes: appRoutes(engine) as never, fetch: notFound });
 }
 
 const bad = (message: string) => Response.json({ errors: { body: [message] } }, { status: 400 });

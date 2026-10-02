@@ -117,7 +117,7 @@ class Parser {
   private app(): AppDef {
     const kw = this.next();
     const name = this.name("app name");
-    return { name: name.value, title: this.optionalTitle(), loc: kw.loc };
+    return { name: name.value, title: this.optionalTitle(), loc: kw.loc, doc: kw.doc };
   }
 
   private record(): RecordDef {
@@ -133,7 +133,7 @@ class Parser {
       fields.push(this.field("field name"));
       this.accept(",") || this.accept(";");
     }
-    return { name: name.value, title, fields, loc: kw.loc };
+    return { name: name.value, title, fields, loc: kw.loc, doc: kw.doc };
   }
 
   private module(): ModuleDef {
@@ -150,6 +150,7 @@ class Parser {
       steps: [],
       flows: [],
       loc: kw.loc,
+      doc: kw.doc,
     };
     this.expect("{");
     while (!this.accept("}")) {
@@ -181,7 +182,7 @@ class Parser {
       fields.push(this.field("column name"));
       this.accept(",") || this.accept(";");
     }
-    return { module, name: name.value, fields, loc: kw.loc, endLine: this.lastLine() };
+    return { module, name: name.value, fields, loc: kw.loc, endLine: this.lastLine(), doc: kw.doc };
   }
 
   private fn(module: string): FnDef {
@@ -191,7 +192,7 @@ class Parser {
     this.expect("->", "'->' followed by the type the function returns");
     const returns = this.type();
     const body = this.block();
-    return { module, name: name.value, params, returns, body, loc: kw.loc, endLine: this.lastLine() };
+    return { module, name: name.value, params, returns, body, loc: kw.loc, endLine: this.lastLine(), doc: kw.doc };
   }
 
   private step(module: string): StepDef {
@@ -227,7 +228,7 @@ class Parser {
     } else {
       this.fail(this.peek(), "Expected the step's body in { } or js \"./file.ts\".");
     }
-    return { module, name: name.value, title, inputs, outcomes, ports, body, loc: kw.loc, endLine: this.lastLine() };
+    return { module, name: name.value, title, inputs, outcomes, ports, body, loc: kw.loc, endLine: this.lastLine(), doc: kw.doc };
   }
 
   private flow(module: string): FlowDef {
@@ -256,6 +257,7 @@ class Parser {
       nodes,
       loc: kw.loc,
       endLine: this.lastLine(),
+      doc: kw.doc,
     };
   }
 
